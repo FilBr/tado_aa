@@ -12,8 +12,6 @@ import threading
 from datetime import datetime
 from PyTado.interface import Tado
 
-last_message = ""
-
 # Settings
 # --------------------------------------------------
 USERNAME = "your_tado_username"  # tado username
@@ -27,7 +25,7 @@ ENABLE_TEMP_LIMIT = True  # activate min and max temp limit with "True" or disab
 SAVE_LOGS = True  # enable log saving with "True" or disable it with "False"
 RESCHEDULE_TIMER = 15 * 60  # Timer to reset schedule of manually controlled areas
 LOGFILE_NAME = "logfile.log"  # log file location (if you are using backslashes please add "r" before quotation mark like so: r"\tado_aa\logfile.log")
-LOGFILE_PATH = "/home/filip/Documents/tado_aa"
+LOGFILE_PATH = "/path/to/store/logfiles/"
 RETENTION_LOGFILE_DAYS = 7
 # --------------------------------------------------
 
