@@ -8,6 +8,7 @@ import sys
 import os
 import time
 import threading
+import traceback
 
 from datetime import datetime
 from dotenv import load_dotenv
@@ -68,7 +69,7 @@ def login():
             sys.exit(0)
         else:
             printm(
-                str(e)
+                traceback.format_exc()
                 + "\nConnection Error, retrying in "
                 + str(ERROR_INTERVAL)
                 + " sec.."
@@ -170,12 +171,9 @@ def home_status():
             )
             time.sleep(1)
             engine()
-        elif str(e).find("NoneType") != -1:
-            time.sleep(1)
-            engine()
         else:
             printm(
-                str(e)
+                traceback.format_exc()
                 + "\nConnection Error, retrying in "
                 + str(ERROR_INTERVAL)
                 + " sec.."
@@ -312,14 +310,14 @@ def engine():
             sys.exit(0)
 
         except Exception as e:
-            if str(e).find("location") != -1 or str(e).find("NoneType") != -1:
+            if str(e).find("location") != -1:
                 printm(
                     "I cannot get the location of one of the devices because the Geofencing is off or the user signed out from tado app.\nWaiting for the device location, until then the Geofencing Assist is NOT active.\nWaiting for an open window.."
                 )
                 time.sleep(CHECKING_INTERVAL)
             else:
                 printm(
-                    str(e)
+                    traceback.format_exc()
                     + "\nConnection Error, retrying in "
                     + str(ERROR_INTERVAL)
                     + " sec.."
