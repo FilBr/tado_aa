@@ -10,12 +10,14 @@ import time
 import threading
 
 from datetime import datetime
+from python_dotenv import load_dotenv
 from PyTado.interface import Tado
 
+load_dotenv()
 # Settings
 # --------------------------------------------------
-USERNAME = "your_tado_username"  # tado username
-PASSWORD = "your_tado_password"  # tado password
+USERNAME = os.getenv("TADO_USERNAME")  # tado username
+PASSWORD = os.getenv("TADO_PASSWORD")  # tado password
 CHECKING_INTERVAL = 30.0  # checking interval (in seconds)
 ERROR_INTERVAL = 30.0  # retrying interval (in seconds), in case of an error
 MIN_TEMP = 5  # minimum allowed temperature, applicable only if ENABLE_TEMP_LIMIT is "TRUE"
