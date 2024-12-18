@@ -27,7 +27,7 @@ ENABLE_TEMP_LIMIT = True  # activate min and max temp limit with "True" or disab
 SAVE_LOGS = True  # enable log saving with "True" or disable it with "False"
 RESCHEDULE_TIMER = 15 * 60  # Timer to reset schedule of manually controlled areas
 LOGFILE_NAME = "logfile.log"  # log file location (if you are using backslashes please add "r" before quotation mark like so: r"\tado_aa\logfile.log")
-LOGFILE_PATH = "/path/to/store/logfiles/"
+LOGFILE_PATH = os.getenv("LOGFILE_PATH")
 RETENTION_LOGFILE_DAYS = 7
 # --------------------------------------------------
 
@@ -329,6 +329,7 @@ def engine():
 
 def printm(message):
     global last_message
+    global date_last_message
 
     if message != last_message:
         sys.stdout.write(
