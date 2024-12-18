@@ -10,7 +10,7 @@ import time
 import threading
 
 from datetime import datetime
-from python_dotenv import load_dotenv
+from dotenv import load_dotenv
 from PyTado.interface import Tado
 
 load_dotenv()
