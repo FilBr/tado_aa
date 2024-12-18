@@ -9,7 +9,7 @@ Description=Tado Auto-Assist Service
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 $DIR/tado_aa.py
+ExecStart=$(which python) $DIR/tado_aa.py
 Restart=always
 User=$USER
 Group=$USER
