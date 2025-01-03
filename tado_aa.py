@@ -37,6 +37,7 @@ def main():
     global last_message
     global date_last_message
     global active_reschedules
+    global stop_flags
 
     # Keep track of messages for log rotation
     last_message = ""
@@ -44,6 +45,7 @@ def main():
 
     # Dictionary to keep track of active reschedules and avoid creating too many threads
     active_reschedules = dict()
+    stop_flags = dict()
 
     login()
     home_status()
@@ -181,14 +183,33 @@ def home_status():
             time.sleep(ERROR_INTERVAL)
             home_status()
 
-
-def reset_to_schedule(zone_id: int) -> None:
-    time.sleep(RESCHEDULE_TIMER)
-    t.reset_zone_overlay(zone_id)
-    printm(
-        f"Room {t.get_state(zone_id)['name']} resumed schedule "
-        f"{t.get_state(zone_id)['setting']['power']} (set to {t.get_state(zone_id)['setting']['temperature']['value']})"
-    )
+def reset_to_schedule(zone_id: int, zone_name: str) -> None:
+    try:
+        while not stop_flags.get(zone_name, False):  # Check if should stop
+            if time.sleep(0.1):  # Check more frequently
+                return
+            
+            remaining_time = CHECKING_INTERVAL * 2
+            # Break the sleep into smaller chunks so we can check stop flag
+            while remaining_time > 0 and not stop_flags.get(zone_name, False):
+                time.sleep(min(1, remaining_time))
+                remaining_time -= 1
+            
+            if stop_flags.get(zone_name, False):
+                printm(f"Room {t.get_state(zone_id)['name']} reschedule stopped")
+                return
+                
+            t.reset_zone_overlay(zone_id)
+            printm(
+                f"Room {t.get_state(zone_id)['name']} resumed schedule "
+                f"{t.get_state(zone_id)['setting']['power']}{' (set to ' + str(t.get_state(zone_id)['setting']['temperature']['value']) + ')' if t.get_state(zone_id)['setting']['temperature'] is not None else ''}"
+            )
+    finally:
+        # Cleanup
+        if zone_name in active_reschedules:
+            del active_reschedules[zone_name]
+        if zone_name in stop_flags:
+            del stop_flags[zone_name]
 
 
 def engine():
@@ -225,8 +246,21 @@ def engine():
                             f"Temperature detected {t.get_state(zone_id)['setting']['power']} (set to {t.get_state(zone_id)['setting']['temperature']['value']}) for room {zone_name} (ID: {zone_id}). "
                             f"Resuming schedule in {RESCHEDULE_TIMER//60} minutes"
                         )
-                        active_reschedules[zone_name] = threading.Thread(target=reset_to_schedule, args=(zone_id,))
+                        active_reschedules[zone_name] = threading.Thread(target=reset_to_schedule, args=(zone_id, zone_name,))
+                        stop_flags[zone_name] = False
                         active_reschedules[zone_name].start()
+
+                # Check for current reschedules: if heating is set to OFF, stop the thread
+                if (
+                    t.get_state(zone_id)["manualControlTermination"] is not None
+                    and t.get_state(zone_id)["setting"]["power"] == "OFF"
+                    and zone_name in active_reschedules
+                    and active_reschedules[zone_name].is_alive()
+                ):
+                    printm(f"Room {zone_name} heating is OFF, stopping reschedule thread")
+                    stop_flags[zone_name] = True
+                    if zone_name in active_reschedules:
+                        active_reschedules[zone_name].join(timeout=CHECKING_INTERVAL + 1)
 
                 # Temp Limit
                 if ENABLE_TEMP_LIMIT == True:
@@ -236,9 +270,6 @@ def engine():
                         and not t.get_state(zone_id)["setting"]["temperature"] is None
                     ):
                         set_temp = t.get_state(zone_id)["setting"]["temperature"]["value"]
-                        current_temp = t.get_state(zone_id)["sensorDataPoints"][
-                            "insideTemperature"
-                        ]["value"]
 
                         if float(set_temp) > float(MAX_TEMP):
                             t.set_zone_overlay(zone_id, "MANUAL", MAX_TEMP)
