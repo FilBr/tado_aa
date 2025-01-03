@@ -189,7 +189,7 @@ def reset_to_schedule(zone_id: int, zone_name: str) -> None:
             if time.sleep(0.1):  # Check more frequently
                 return
             
-            remaining_time = CHECKING_INTERVAL * 2
+            remaining_time = RESCHEDULE_TIMER
             # Break the sleep into smaller chunks so we can check stop flag
             while remaining_time > 0 and not stop_flags.get(zone_name, False):
                 time.sleep(min(1, remaining_time))
