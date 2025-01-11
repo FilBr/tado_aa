@@ -1,418 +1,299 @@
-#
-# tado_aa.py (Tado Auto-Assist for Geofencing and Open Window Detection)
-# Created by Adrian Slabu <adrianslabu@icloud.com> on 11.02.2021
-# Edits by Filippo Barba <filippo.barba@protonmail.com> on 18.12.2024
-#
+'''Python script to control Tado devices based on the location of the devices and the temperature of the rooms.'''
 
 import sys
 import os
 import time
 import threading
 import traceback
-
 from datetime import datetime
 from dotenv import load_dotenv
 from PyTado.interface import Tado
 
+# Load environment variables
 load_dotenv()
-# Settings
-# --------------------------------------------------
-USERNAME = os.getenv("TADO_USERNAME")  # tado username
-PASSWORD = os.getenv("TADO_PASSWORD")  # tado password
-CHECKING_INTERVAL = 30.0  # checking interval (in seconds)
-ERROR_INTERVAL = 30.0  # retrying interval (in seconds), in case of an error
-MIN_TEMP = 5  # minimum allowed temperature, applicable only if ENABLE_TEMP_LIMIT is "TRUE"
-MAX_TEMP = 25  # maximum allowed temperature, applicable only if ENABLE_TEMP_LIMIT is "TRUE"
-MAX_INTERNAL_TEMP = 26.0
-ENABLE_TEMP_LIMIT = True  # activate min and max temp limit with "True" or disable it with "False"
-SAVE_LOGS = True  # enable log saving with "True" or disable it with "False"
-RESCHEDULE_TIMER = 15 * 60  # Timer to reset schedule of manually controlled areas
-LOGFILE_NAME = "logfile.log"  # log file location (if you are using backslashes please add "r" before quotation mark like so: r"\tado_aa\logfile.log")
-LOGFILE_PATH = os.getenv("LOGFILE_PATH")
-RETENTION_LOGFILE_DAYS = 7
-# --------------------------------------------------
 
-def main():
+class TadoController:
+    '''
+    TadoController class to control Tado devices
+    '''
+    # Configuration settings
+    CHECKING_INTERVAL = 30.0
+    ERROR_INTERVAL = 30.0
+    MIN_TEMP = 5
+    MAX_TEMP = 25
+    MAX_INTERNAL_TEMP = 26.0
+    ENABLE_TEMP_LIMIT = True
+    SAVE_LOGS = True
+    RESCHEDULE_TIMER = 15 * 60
+    LOGFILE_NAME = "logfile.log"
+    LOGFILE_PATH = os.getenv("LOGFILE_PATH")
+    RETENTION_LOGFILE_DAYS = 7
 
-    global last_message
-    global date_last_message
-    global active_reschedules
-    global stop_flags
+    def __init__(self, username: str, password: str):
+        '''
+        Initialize the TadoController class
 
-    # Keep track of messages for log rotation
-    last_message = ""
-    date_last_message = datetime.now().day
+        :param username: Tado username
+        :param password: Tado password
+        '''
+        self.username = username
+        self.password = password
+        self.last_message = ""
+        self.date_last_message = datetime.now().day
+        self.active_reschedules = {}
+        self.stop_flags = {}
+        self.t = None
+        self.devices_home = []
 
-    # Dictionary to keep track of active reschedules and avoid creating too many threads
-    active_reschedules = dict()
-    stop_flags = dict()
-
-    login()
-    home_status()
-
-
-def login():
-
-    global t
-
-    try:
-        t = Tado(USERNAME, PASSWORD, None, False)
-
-        if last_message.find("Connection Error") != -1:
-            printm("Connection established, everything looks good now, continuing..\n")
-
-    except KeyboardInterrupt:
-        printm("Interrupted by user.")
-        sys.exit(0)
-
-    except Exception as e:
-        if str(e).find("access_token") != -1:
-            printm("Login error, check the username / password !")
-            sys.exit(0)
-        else:
-            printm(
-                traceback.format_exc()
-                + "\nConnection Error, retrying in "
-                + str(ERROR_INTERVAL)
-                + " sec.."
-            )
-            time.sleep(ERROR_INTERVAL)
-            login()
-
-
-def home_status():
-
-    global devices_home
-
-    try:
-        home_state = t.get_home_state()["presence"]
-        devices_home = []
-
-        for device in t.get_mobile_devices():
-            if device["settings"]["geoTrackingEnabled"] == True:
-                if device["location"] != None:
-                    if device["location"]["atHome"] == True:
-                        devices_home.append(device["name"])
-
-        if (
-            last_message.find("Connection Error") != -1
-            or last_message.find("Waiting for the device location") != -1
-        ):
-            printm(
-                "Successfully got the location, everything looks good now, continuing..\n"
-            )
-
-        if len(devices_home) > 0 and home_state == "HOME":
-            if len(devices_home) == 1:
-                printm(
-                    "Your home is in HOME Mode, the device "
-                    + devices_home[0]
-                    + " is at home."
-                )
-            else:
-                devices = ""
-                for i in range(len(devices_home)):
-                    if i != len(devices_home) - 1:
-                        devices += devices_home[i] + ", "
-                    else:
-                        devices += devices_home[i]
-                printm(
-                    "Your home is in HOME Mode, the devices "
-                    + devices
-                    + " are at home."
-                )
-        elif len(devices_home) == 0 and home_state == "AWAY":
-            printm("Your home is in AWAY Mode and are no devices at home.")
-        elif len(devices_home) == 0 and home_state == "HOME":
-            printm("Your home is in HOME Mode but are no devices at home.")
-            printm("Activating AWAY mode.")
-            t.set_away()
-            printm("Done!")
-        elif len(devices_home) > 0 and home_state == "AWAY":
-            if len(devices_home) == 1:
-                printm(
-                    "Your home is in AWAY Mode but the device "
-                    + devices_home[0]
-                    + " is at home."
-                )
-            else:
-                devices = ""
-                for i in range(len(devices_home)):
-                    if i != len(devices_home) - 1:
-                        devices += devices_home[i] + ", "
-                    else:
-                        devices += devices_home[i]
-                printm(
-                    "Your home is in AWAY Mode but the devices "
-                    + devices
-                    + " are at home."
-                )
-
-            printm("Activating HOME mode.")
-            t.set_home()
-            printm("Done!")
-
-        devices_home.clear()
-        printm("Waiting for a change in devices location or for an open window..")
-        printm(
-            "Temp Limit is {0}, min Temp({1}) and max Temp({2})".format(
-                "ON" if (ENABLE_TEMP_LIMIT) else "OFF", MIN_TEMP, MAX_TEMP
-            )
-        )
-        time.sleep(1)
-        engine()
-
-    except KeyboardInterrupt:
-        printm("Interrupted by user.")
-        sys.exit(0)
-
-    except Exception as e:
-        if str(e).find("location") != -1:
-            printm(
-                "I cannot get the location of one of the devices because the Geofencing is off or the user signed out from tado app.\nWaiting for the device location, until then the Geofencing Assist is NOT active.\nWaiting for an open window.."
-            )
-            time.sleep(1)
-            engine()
-        else:
-            printm(
-                traceback.format_exc()
-                + "\nConnection Error, retrying in "
-                + str(ERROR_INTERVAL)
-                + " sec.."
-            )
-            time.sleep(ERROR_INTERVAL)
-            home_status()
-
-def reset_to_schedule(zone_id: int, zone_name: str) -> None:
-    try:
-        while not stop_flags.get(zone_name, False):  # Check if should stop
-            if time.sleep(0.1):  # Check more frequently
-                return
-            
-            remaining_time = RESCHEDULE_TIMER
-            # Break the sleep into smaller chunks so we can check stop flag
-            while remaining_time > 0 and not stop_flags.get(zone_name, False):
-                time.sleep(min(1, remaining_time))
-                remaining_time -= 1
-            
-            if stop_flags.get(zone_name, False):
-                printm(f"Room {t.get_state(zone_id)['name']} reschedule stopped")
-                return
-                
-            t.reset_zone_overlay(zone_id)
-            printm(
-                f"Room {t.get_state(zone_id)['name']} resumed schedule "
-                f"{t.get_state(zone_id)['setting']['power']}{' (set to ' + str(t.get_state(zone_id)['setting']['temperature']['value']) + ')' if t.get_state(zone_id)['setting']['temperature'] is not None else ''}"
-            )
-    finally:
-        # Cleanup
-        if zone_name in active_reschedules:
-            del active_reschedules[zone_name]
-        if zone_name in stop_flags:
-            del stop_flags[zone_name]
-
-
-def engine():
-    while True:
+    def login(self):
+        '''
+        Login to a Tado account
+        '''
         try:
-            # Open Window Detection
-            for z in t.get_zones():
-                zone_id = z["roomId"]
-                zone_name = z["roomName"]
+            self.t = Tado(self.username, self.password, None, False)
 
-                # Check internal temperature
-                if t.get_state(zone_id)['sensorDataPoints']['insideTemperature']['value'] >= MAX_INTERNAL_TEMP:
-                    t.reset_zone_overlay(zone_id)
-
-                # Automatic open window mode
-                if t.get_open_window_detected(zone_id)["openWindowDetected"] == True:
-                    printm(
-                        zone_name
-                        + ": open window detected, activating the OpenWindow mode."
-                    )
-                    t.set_open_window(zone_id)
-                    printm("Done!")
-                    printm(
-                        "Waiting for a change in devices location or for an open window.."
-                    )
-
-                # Resume schedule after timer
-                if (
-                    t.get_state(zone_id)["manualControlTermination"] is not None
-                    and t.get_state(zone_id)["setting"]["power"] == "ON"
-                ):
-                    if zone_name not in active_reschedules or not active_reschedules[zone_name].is_alive():
-                        printm(
-                            f"Temperature detected {t.get_state(zone_id)['setting']['power']} (set to {t.get_state(zone_id)['setting']['temperature']['value']}) for room {zone_name} (ID: {zone_id}). "
-                            f"Resuming schedule in {RESCHEDULE_TIMER//60} minutes"
-                        )
-                        active_reschedules[zone_name] = threading.Thread(target=reset_to_schedule, args=(zone_id, zone_name,))
-                        stop_flags[zone_name] = False
-                        active_reschedules[zone_name].start()
-
-                # Check for current reschedules: if heating is set to OFF, stop the thread
-                if (
-                    t.get_state(zone_id)["manualControlTermination"] is not None
-                    and t.get_state(zone_id)["setting"]["power"] == "OFF"
-                    and zone_name in active_reschedules
-                    and active_reschedules[zone_name].is_alive()
-                ):
-                    printm(f"Room {zone_name} heating is OFF, stopping reschedule thread")
-                    stop_flags[zone_name] = True
-                    if zone_name in active_reschedules:
-                        active_reschedules[zone_name].join(timeout=CHECKING_INTERVAL + 1)
-
-                # Temp Limit
-                if ENABLE_TEMP_LIMIT == True:
-                    if (
-                        t.get_state(zone_id)["heatingPower"]["percentage"] > 0
-                        and t.get_state(zone_id)["setting"]["power"] == "ON"
-                        and not t.get_state(zone_id)["setting"]["temperature"] is None
-                    ):
-                        set_temp = t.get_state(zone_id)["setting"]["temperature"]["value"]
-
-                        if float(set_temp) > float(MAX_TEMP):
-                            t.set_zone_overlay(zone_id, "MANUAL", MAX_TEMP)
-                            printm(
-                                "{0}: Set Temp ({1}) is higher than the desired max Temp({2}), set {0} to {2} degrees!".format(
-                                    zone_name, set_temp, MAX_TEMP
-                                )
-                            )
-                        elif float(set_temp) < float(MIN_TEMP):
-                            t.set_zone_overlay(zone_id, 0, MIN_TEMP)
-                            printm(
-                                "{0}: Set Temp ({1}) is lower than the desired min Temp({2}), set {0} to {2} degrees!".format(
-                                    zone_name, set_temp, MIN_TEMP
-                                )
-                            )
-
-            # Geofencing
-            home_state = t.get_home_state()["presence"]
-
-            devices_home.clear()
-
-            for device in t.get_mobile_devices():
-                if device["settings"]["geoTrackingEnabled"] == True:
-                    if device["location"] != None:
-                        if device["location"]["atHome"] == True:
-                            devices_home.append(device["name"])
-
-            if (
-                last_message.find("Connection Error") != -1
-                or last_message.find("Waiting for the device location") != -1
-            ):
-                printm(
-                    "Successfully got the location, everything looks good now, continuing..\n"
-                )
-                printm(
-                    "Waiting for a change in devices location or for an open window.."
-                )
-
-            if len(devices_home) > 0 and home_state == "AWAY":
-                if len(devices_home) == 1:
-                    printm(devices_home[0] + " is at home, activating HOME mode.")
-                else:
-                    devices = ""
-                    for i in range(len(devices_home)):
-                        if i != len(devices_home) - 1:
-                            devices += devices_home[i] + ", "
-                        else:
-                            devices += devices_home[i]
-                    printm(devices + " are at home, activating HOME mode.")
-                t.set_home()
-                printm("Done!")
-                printm(
-                    "Waiting for a change in devices location or for an open window.."
-                )
-
-            elif len(devices_home) == 0 and home_state == "HOME":
-                printm("Are no devices at home, activating AWAY mode.")
-                t.set_away()
-                printm("Done!")
-                printm(
-                    "Waiting for a change in devices location or for an open window.."
-                )
-
-            devices_home.clear()
-            time.sleep(CHECKING_INTERVAL)
+            if "Connection Error" in self.last_message:
+                self.print_message("Connection established, continuing..")
 
         except KeyboardInterrupt:
-            printm("Interrupted by user.")
+            self.print_message("Interrupted by user.")
             sys.exit(0)
 
         except Exception as e:
-            if str(e).find("location") != -1:
-                printm(
-                    "I cannot get the location of one of the devices because the Geofencing is off or the user signed out from tado app.\nWaiting for the device location, until then the Geofencing Assist is NOT active.\nWaiting for an open window.."
-                )
-                time.sleep(CHECKING_INTERVAL)
+            if "access_token" in str(e):
+                self.print_message("Login error, check credentials!")
+                sys.exit(0)
             else:
-                printm(
-                    traceback.format_exc()
-                    + "\nConnection Error, retrying in "
-                    + str(ERROR_INTERVAL)
-                    + " sec.."
+                self.print_message(
+                    traceback.format_exc() + "\nConnection Error, retrying in " + str(self.ERROR_INTERVAL) + " sec.."
                 )
-                time.sleep(ERROR_INTERVAL)
+                time.sleep(self.ERROR_INTERVAL)
+                self.login()
 
+    def home_status(self):
+        '''
+        Check home status. If no devices are at home, activate AWAY mode.
+        '''
+        try:
+            home_state = self.t.get_home_state()["presence"]
 
-def printm(message):
-    global last_message
-    global date_last_message
+            if not self.devices_home:
+                for device in self.t.get_mobile_devices():
+                    if device["settings"]["geoTrackingEnabled"] and device["location"]["atHome"]:
+                        self.devices_home.append(device["name"])
 
-    if message != last_message:
-        sys.stdout.write(
-            datetime.now().strftime("%d-%m-%Y %H:%M:%S") + " # " + message + "\n"
-        )
+            if "Connection Error" in self.last_message:
+                self.print_message("Successfully got the location, continuing..")
 
-        if SAVE_LOGS == True:
+            if self.devices_home and home_state == "HOME":
+                self.manage_home_mode(len(self.devices_home))
+            elif not self.devices_home and home_state == "AWAY":
+                self.print_message("No devices at home, activating AWAY mode.")
+                self.t.set_away()
+            elif not self.devices_home and home_state == "HOME":
+                self.print_message("Activating AWAY mode.")
+                self.t.set_away()
+            elif self.devices_home and home_state == "AWAY":
+                self.manage_home_mode(len(self.devices_home))
+
+            self.print_message("Waiting for a change in device location..")
+            self.print_message(f"Temp Limit is {'ON' if self.ENABLE_TEMP_LIMIT else 'OFF'}, min Temp({self.MIN_TEMP}), max Temp({self.MAX_TEMP})")
+            time.sleep(1)
+            self.engine()
+
+        except KeyboardInterrupt:
+            self.print_message("Interrupted by user.")
+            sys.exit(0)
+
+        except Exception as e:
+            if "location" in str(e):
+                self.print_message("Waiting for device location.")
+                time.sleep(1)
+            else:
+                self.print_message(
+                    traceback.format_exc() + "\nConnection Error, retrying in " + str(self.ERROR_INTERVAL) + " sec.."
+                )
+                time.sleep(self.ERROR_INTERVAL)
+                self.home_status()
+
+    def manage_home_mode(self, num_devices):
+        '''
+        Manage home mode. If at least one device is at home, activate HOME mode.
+        '''
+        if num_devices == 1:
+            self.print_message(f"Home Mode activated. Device {self.devices_home[0]} is at home.")
+        else:
+            devices = ", ".join(self.devices_home)
+            self.print_message(f"Home Mode activated. Devices {devices} are at home.")
+        self.t.set_home()
+
+    def reset_to_schedule(self, zone_id, zone_name):
+        '''
+        Reset the zone to the schedule. To be launched in a separate thread.
+        '''
+        try:
+            while not self.stop_flags.get(zone_name, False):
+                if time.sleep(0.1):
+                    return
+
+                remaining_time = self.RESCHEDULE_TIMER
+                while remaining_time > 0 and not self.stop_flags.get(zone_name, False):
+                    time.sleep(min(1, remaining_time))
+                    remaining_time -= 1
+
+                if self.stop_flags.get(zone_name, False):
+                    self.print_message(f"Room {self.t.get_state(zone_id)['name']} reschedule stopped")
+                    return
+
+                self.t.reset_zone_overlay(zone_id)
+                self.print_message(
+                    f"Room {self.t.get_state(zone_id)['name']} resumed schedule "
+                    f"{self.t.get_state(zone_id)['setting']['power']}{' (set to ' + str(self.t.get_state(zone_id)['setting']['temperature']['value']) + ')' if self.t.get_state(zone_id)['setting']['temperature'] is not None else ''}"
+                )
+
+        finally:
+            if zone_name in self.active_reschedules:
+                del self.active_reschedules[zone_name]
+            if zone_name in self.stop_flags:
+                del self.stop_flags[zone_name]
+
+    def engine(self):
+        '''
+        Main engine to control the Tado devices
+        '''
+        while True:
             try:
-                with open(os.path.join(LOGFILE_PATH, LOGFILE_NAME), "a") as log:
-                    log.write(
-                        datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-                        + " # "
-                        + message
-                        + "\n"
-                    )
-                    log.close()
+                for zone in self.t.get_zones():
+                    zone_id = zone["roomId"]
+                    zone_name = zone["roomName"]
+
+                    if self.t.get_open_window_detected(zone_id)["openWindowDetected"]:
+                        if self.t.get_state(zone_id).get("openWindow", False) and "activated" in self.t.get_state(zone_id)["openWindow"]:
+                            self.print_message(f"{zone_name}: Open window detected, OpenWindow mode already activated.")
+                            continue
+                        self.print_message(f"{zone_name}: Open window detected, activating OpenWindow mode.")
+                        self.t.set_open_window(zone_id)
+                        self.print_message("Done!")
+                        self.print_message("Waiting for a change in device location..")
+                        continue
+
+                    if self.t.get_state(zone_id)['sensorDataPoints']['insideTemperature']['value'] >= self.MAX_INTERNAL_TEMP:
+                        self.t.reset_zone_overlay(zone_id)
+
+                    if self.t.get_state(zone_id)["manualControlTermination"] and self.t.get_state(zone_id)["setting"]["power"] == "ON":
+                        if zone_name not in self.active_reschedules or not self.active_reschedules[zone_name].is_alive():
+                            self.print_message(
+                                f"Temperature detected {self.t.get_state(zone_id)['setting']['power']} (set to {self.t.get_state(zone_id)['setting']['temperature']['value']}) for room {zone_name} (ID: {zone_id}). "
+                                f"Resuming schedule in {self.RESCHEDULE_TIMER//60} minutes"
+                            )
+                            self.active_reschedules[zone_name] = threading.Thread(target=self.reset_to_schedule, args=(zone_id, zone_name,))
+                            self.stop_flags[zone_name] = False
+                            self.active_reschedules[zone_name].start()
+
+                    if self.t.get_state(zone_id)["manualControlTermination"] and self.t.get_state(zone_id)["setting"]["power"] == "OFF":
+                        if zone_name in self.active_reschedules and self.active_reschedules[zone_name].is_alive():
+                            self.print_message(f"Room {zone_name} heating is OFF, stopping reschedule thread")
+                            self.stop_flags[zone_name] = True
+                            if zone_name in self.active_reschedules:
+                                self.active_reschedules[zone_name].join(timeout=self.CHECKING_INTERVAL + 1)
+
+                    if self.ENABLE_TEMP_LIMIT:
+                        if (
+                            self.t.get_state(zone_id)["heatingPower"]["percentage"] > 0
+                            and self.t.get_state(zone_id)["setting"]["power"] == "ON"
+                            and self.t.get_state(zone_id)["setting"]["temperature"] is not None
+                        ):
+                            set_temp = self.t.get_state(zone_id)["setting"]["temperature"]["value"]
+
+                            if set_temp > self.MAX_TEMP:
+                                self.t.set_zone_overlay(zone_id, "MANUAL", self.MAX_TEMP)
+                                self.print_message(
+                                    f"{zone_name}: Set Temp ({set_temp}) is higher than the desired max Temp({self.MAX_TEMP}), set {zone_name} to {self.MAX_TEMP} degrees!"
+                                )
+                            elif set_temp < self.MIN_TEMP:
+                                self.t.set_zone_overlay(zone_id, 0, self.MIN_TEMP)
+                                self.print_message(
+                                    f"{zone_name}: Set Temp ({set_temp}) is lower than the desired min Temp({self.MIN_TEMP}), set {zone_name} to {self.MIN_TEMP} degrees!"
+                                )
+
+                home_state = self.t.get_home_state()["presence"]
+
+                self.devices_home.clear()
+
+                if not self.devices_home:
+                    for device in self.t.get_mobile_devices():
+                        if device["settings"]["geoTrackingEnabled"] and device["location"]["atHome"]:
+                            self.devices_home.append(device["name"])
+
+                if "Connection Error" in self.last_message:
+                    self.print_message("Successfully got the location, continuing..")
+                    self.print_message("Waiting for a change in device location..")
+
+                if self.devices_home and home_state == "AWAY":
+                    self.manage_home_mode(len(self.devices_home))
+
+                elif not self.devices_home and home_state == "HOME":
+                    self.print_message("Activating AWAY mode.")
+                    self.t.set_away()
+
+                self.devices_home.clear()
+                time.sleep(self.CHECKING_INTERVAL)
+
+            except KeyboardInterrupt:
+                self.print_message("Interrupted by user.")
+                sys.exit(0)
+
             except Exception as e:
-                sys.stdout.write(
-                    datetime.now().strftime("%d-%m-%Y %H:%M:%S") + " # " + str(e) + "\n"
-                )
+                if "location" in str(e):
+                    self.print_message("Waiting for device location.")
+                else:
+                    self.print_message(
+                        traceback.format_exc() + "\nConnection Error, retrying in " + str(self.ERROR_INTERVAL) + " sec.."
+                    )
+                    time.sleep(self.ERROR_INTERVAL)
 
-            # Check the number of lines in the log file
-            if datetime.now().day != date_last_message:
-                rotate_log()
+    def print_message(self, message):
+        '''
+        Print a formatted message to the console and save it to a log file
+        '''
+        if message != self.last_message:
+            sys.stdout.write(datetime.now().strftime("%d-%m-%Y %H:%M:%S") + " # " + message + "\n")
 
-            date_last_message = datetime.now().day
-        last_message = message
+            if self.SAVE_LOGS:
+                try:
+                    with open(os.path.join(self.LOGFILE_PATH, self.LOGFILE_NAME), "a") as log:
+                        log.write(datetime.now().strftime("%d-%m-%Y %H:%M:%S") + " # " + message + "\n")
+                except Exception as e:
+                    sys.stdout.write(datetime.now().strftime("%d-%m-%Y %H:%M:%S") + " # " + traceback.format_exc() + str(e) + "\n")
 
+            if datetime.now().day != self.date_last_message:
+                self.rotate_log()
 
-def rotate_log():
-    # Create a new log file with a timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d")
-    new_logfile = LOGFILE_NAME.replace(".log", f"_{timestamp}.log")
+            self.date_last_message = datetime.now().day
+            self.last_message = message
 
-    # Close the current log file and rename it
-    os.rename(os.path.join(LOGFILE_PATH, LOGFILE_NAME), os.path.join(LOGFILE_PATH, new_logfile))
+    def rotate_log(self):
+        '''
+        Rotate the log file based on the date
+        '''
+        timestamp = datetime.now().strftime("%Y-%m-%d")
+        new_logfile = self.LOGFILE_NAME.replace(".log", f"_{timestamp}.log")
+        os.rename(os.path.join(self.LOGFILE_PATH, self.LOGFILE_NAME), os.path.join(self.LOGFILE_PATH, new_logfile))
+        open(os.path.join(self.LOGFILE_PATH, self.LOGFILE_NAME), "w").close()
 
-    # Open a new log file
-    with open(os.path.join(LOGFILE_PATH, LOGFILE_NAME), "w"):
-        pass
-
-    while len([f for f in os.listdir(LOGFILE_PATH) if "logfile" in f]) > 7:
-        logfiles = [f for f in os.listdir(LOGFILE_PATH) if "logfile" in f]
-        if len(logfiles) > RETENTION_LOGFILE_DAYS:
+        while len([f for f in os.listdir(self.LOGFILE_PATH) if "logfile" in f]) > self.RETENTION_LOGFILE_DAYS:
+            logfiles = [f for f in os.listdir(self.LOGFILE_PATH) if "logfile" in f]
             oldest_log_time = None
             oldest_log_file = None
             for f in logfiles:
-                file_date = os.path.getmtime(os.path.join(LOGFILE_PATH, f))
+                file_date = os.path.getmtime(os.path.join(self.LOGFILE_PATH, f))
                 if oldest_log_time is None or file_date < oldest_log_time:
                     oldest_log_time = file_date
                     oldest_log_file = f
 
-            os.remove(os.path.join(LOGFILE_PATH, oldest_log_file))
-
+            os.remove(os.path.join(self.LOGFILE_PATH, oldest_log_file))
 
 if __name__ == "__main__":
-    main()
+    controller = TadoController(username=os.getenv("TADO_USERNAME"), password=os.getenv("TADO_PASSWORD"))
+    controller.login()
+    controller.home_status()
