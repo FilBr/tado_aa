@@ -42,7 +42,7 @@ class TadoController:
         self.date_last_message = datetime.now().day
         self.active_reschedules = {}
         self.stop_flags = {}
-        self.t = None
+        self.t: Tado | None = None
         self.devices_home = []
 
     def login(self):
@@ -168,13 +168,12 @@ class TadoController:
                     zone_name = zone["roomName"]
 
                     if self.t.get_open_window_detected(zone_id)["openWindowDetected"]:
-                        if self.t.get_state(zone_id).get("openWindow", False) and "activated" in self.t.get_state(zone_id)["openWindow"]:
+                        if "activated" in self.t.get_state(zone_id)["openWindow"] and self.t.get_state(zone_id)['openWindow']['activated']:
                             self.print_message(f"{zone_name}: Open window detected, OpenWindow mode already activated.")
                             continue
                         self.print_message(f"{zone_name}: Open window detected, activating OpenWindow mode.")
                         self.t.set_open_window(zone_id)
                         self.print_message("Done!")
-                        self.print_message("Waiting for a change in device location..")
                         continue
 
                     if self.t.get_state(zone_id)['sensorDataPoints']['insideTemperature']['value'] >= self.MAX_INTERNAL_TEMP:
